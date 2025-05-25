@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart Registration Form</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="form-header">
+        <h1>Create Account</h1>
+        <p>Join us today and start your journey</p>
+      </div>
+
+      <form class="registration-form" id="registrationForm" novalidate>
+        <div class="input-group">
+          <label for="fullName">Full Name</label>
+          <input type="text" id="fullName" name="fullName" required />
+          <div class="error-message" id="fullNameError">
+            <span class="error-icon">!</span>
+            <span class="error-text"></span>
+          </div>
+          <div class="success-message" id="fullNameSuccess">
+            <span class="success-icon">✓</span>
+            <span>Looks good!</span>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="email">Email Address</label>
+          <input type="email" id="email" name="email" required />
+          <div class="error-message" id="emailError">
+            <span class="error-icon">!</span>
+            <span class="error-text"></span>
+          </div>
+          <div class="success-message" id="emailSuccess">
+            <span class="success-icon">✓</span>
+            <span>Valid email address!</span>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required />
+          <div class="password-strength">
+            <!-- Bu komponent çox sevilib məşhur olan komponentdi, işləvliliyi da tam olaraq onlardan baxılaraq eynisi yazılıb-->
+            <div class="strength-bar">
+              <div class="strength-fill" id="strengthFill"></div>
+            </div>
+            <div class="strength-text" id="strengthText"></div>
+          </div>
+          <div class="error-message" id="passwordError">
+            <span class="error-icon">!</span>
+            <span class="error-text"></span>
+          </div>
+          <div class="success-message" id="passwordSuccess">
+            <span class="success-icon">✓</span>
+            <span>Strong password!</span>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="confirmPassword">Confirm Password</label>
+          <input
+            type="password"
+            id="confirmPassword"
+            name="confirmPassword"
+            required
+          />
+          <div class="error-message" id="confirmPasswordError">
+            <span class="error-icon">!</span>
+            <span class="error-text"></span>
+          </div>
+          <div class="success-message" id="confirmPasswordSuccess">
+            <span class="success-icon">✓</span>
+            <span>Passwords match!</span>
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn" id="submitBtn" disabled>
+          Create Account
+        </button>
+      </form>
+    </div>
+
+    <div class="success-modal" id="successModal">
+      <div class="modal-content">
+        <div class="modal-icon">✓</div>
+        <h2>Welcome!</h2>
+        <p>
+          Your account has been created successfully. Welcome to our community!
+        </p>
+        <button class="close-modal" onclick="closeModal()">Get Started</button>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("registrationForm");
+      const submitBtn = document.getElementById("submitBtn");
+      const modal = document.getElementById("successModal");
+
+      const fullName = document.getElementById("fullName");
+      const email = document.getElementById("email");
+      const password = document.getElementById("password");
+      const confirmPassword = document.getElementById("confirmPassword");
+
+      let validation = {
+        fullName: false,
+        email: false,
+        password: false,
+        confirmPassword: false,
+      };
+
+      function validateFullName() {
+        const value = fullName.value.trim();
+        const errorEl = document.getElementById("fullNameError");
+        const successEl = document.getElementById("fullNameSuccess");
+
+        if (value.length < 2) {
+          showError(
+            fullName,
+            errorEl,
+            successEl,
+            "Name must be at least 2 characters"
+          );
+          validation.fullName = false;
+        } else if (!/^[a-zA-Z\s]+$/.test(value)) {
+          showError(
+            fullName,
+            errorEl,
+            successEl,
+            "Name can only contain letters and spaces"
+          );
+          validation.fullName = false;
+        } else {
+          showSuccess(fullName, errorEl, successEl);
+          validation.fullName = true;
+        }
+        updateSubmitButton();
+      }
+
+      function validateEmail() {
+        const value = email.value.trim();
+        const errorEl = document.getElementById("emailError");
+        const successEl = document.getElementById("emailSuccess");
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!emailRegex.test(value)) {
+          showError(
+            email,
+            errorEl,
+            successEl,
+            "Please enter a valid email address"
+          );
+          validation.email = false;
+        } else {
+          showSuccess(email, errorEl, successEl);
+          validation.email = true;
+        }
+        updateSubmitButton();
+      }
+
+      function validatePassword() {
+        const value = password.value;
+        const errorEl = document.getElementById("passwordError");
+        const successEl = document.getElementById("passwordSuccess");
+        const strengthFill = document.getElementById("strengthFill");
+        const strengthText = document.getElementById("strengthText");
+
+        const strength = calculatePasswordStrength(value);
+        updatePasswordStrength(strengthFill, strengthText, strength);
+
+        if (value.length < 8) {
+          showError(
+            password,
+            errorEl,
+            successEl,
+            "Password must be at least 8 characters"
+          );
+          validation.password = false;
+        } else if (strength.score < 3) {
+          showError(password, errorEl, successEl, "Password is too weak");
+          validation.password = false;
+        } else {
+          showSuccess(password, errorEl, successEl);
+          validation.password = true;
+        }
+
+        if (confirmPassword.value) {
+          validateConfirmPassword();
+        }
+
+        updateSubmitButton();
+      }
+
+      function validateConfirmPassword() {
+        const value = confirmPassword.value;
+        const errorEl = document.getElementById("confirmPasswordError");
+        const successEl = document.getElementById("confirmPasswordSuccess");
+
+        if (value !== password.value) {
+          showError(
+            confirmPassword,
+            errorEl,
+            successEl,
+            "Passwords do not match"
+          );
+          validation.confirmPassword = false;
+        } else if (value.length === 0) {
+          hideMessages(confirmPassword, errorEl, successEl);
+          validation.confirmPassword = false;
+        } else {
+          showSuccess(confirmPassword, errorEl, successEl);
+          validation.confirmPassword = true;
+        }
+        updateSubmitButton();
+      }
+
+      function calculatePasswordStrength(password) {
+        let score = 0;
+        let feedback = [];
+
+        if (password.length >= 8) score++;
+        if (password.length >= 12) score++;
+        if (/[a-z]/.test(password)) score++;
+        if (/[A-Z]/.test(password)) score++;
+        if (/[0-9]/.test(password)) score++;
+        if (/[^A-Za-z0-9]/.test(password)) score++;
+
+        let strength = "weak";
+        if (score >= 6) strength = "strong";
+        else if (score >= 4) strength = "good";
+        else if (score >= 2) strength = "fair";
+
+        return { score, strength };
+      }
+
+      function updatePasswordStrength(fillEl, textEl, strength) {
+        fillEl.className = `strength-fill ${strength.strength}`;
+        textEl.textContent = `Password strength: ${strength.strength}`;
+      }
+
+      function showError(input, errorEl, successEl, message) {
+        input.classList.add("invalid");
+        input.classList.remove("valid");
+        errorEl.querySelector(".error-text").textContent = message;
+        errorEl.classList.add("show");
+        successEl.classList.remove("show");
+      }
+
+      function showSuccess(input, errorEl, successEl) {
+        input.classList.add("valid");
+        input.classList.remove("invalid");
+        successEl.classList.add("show");
+        errorEl.classList.remove("show");
+      }
+
+      function hideMessages(input, errorEl, successEl) {
+        input.classList.remove("valid", "invalid");
+        errorEl.classList.remove("show");
+        successEl.classList.remove("show");
+      }
+
+      function updateSubmitButton() {
+        const allValid = Object.values(validation).every((v) => v);
+        submitBtn.disabled = !allValid;
+      }
+
+      fullName.addEventListener("blur", validateFullName);
+      fullName.addEventListener("input", validateFullName);
+
+      email.addEventListener("blur", validateEmail);
+      email.addEventListener("input", validateEmail);
+
+      password.addEventListener("input", validatePassword);
+      confirmPassword.addEventListener("input", validateConfirmPassword);
+
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+
+        validateFullName();
+        validateEmail();
+        validatePassword();
+        validateConfirmPassword();
+
+        const allValid = Object.values(validation).every((v) => v);
+
+        if (allValid) {
+          modal.classList.add("show");
+        }
+      });
+
+      function closeModal() {
+        modal.classList.remove("show");
+        form.reset();
+        validation = {
+          fullName: false,
+          email: false,
+          password: false,
+          confirmPassword: false,
+        };
+        document.querySelectorAll("input").forEach((input) => {
+          input.classList.remove("valid", "invalid");
+        });
+        document
+          .querySelectorAll(".error-message, .success-message")
+          .forEach((msg) => {
+            msg.classList.remove("show");
+          });
+        document.getElementById("strengthFill").className = "strength-fill";
+        document.getElementById("strengthText").textContent = "";
+        updateSubmitButton();
+      }
+    </script>
+  </body>
+</html>
