@@ -1,23 +1,38 @@
-# Smart Registration Form
+<h1 align="center">Smart Registration Form</h1>
 
-**A registration form with real-time validation written from scratch — no validation library, no browser default popups.**
+<p align="center"><b>A registration form with real-time validation written from scratch — no validation library, no browser default popups.</b></p>
 
-[![Live Demo](https://img.shields.io/badge/Live_Demo-elegant--pastelito--6c3353.netlify.app-2ea44f?style=flat-square&logo=vercel&logoColor=white)](https://elegant-pastelito-6c3353.netlify.app/)
+<p align="center">
+[![Live Demo](https://img.shields.io/badge/Live_Demo-▶-2ea44f?style=for-the-badge&logo=vercel&logoColor=white)](https://elegant-pastelito-6c3353.netlify.app/)
 ![HTML5](https://img.shields.io/badge/HTML5-e34f26?style=flat-square&logoColor=white)
 ![CSS3](https://img.shields.io/badge/CSS3-1572b6?style=flat-square&logoColor=white)
 ![Vanilla JS](https://img.shields.io/badge/Vanilla_JS-f7df1e?style=flat-square&logoColor=white)
+</p>
+
+<p align="center">[**Live demo**](https://elegant-pastelito-6c3353.netlify.app/) · [Quick start](#quick-start) · [Features](#features) · [Architecture](#architecture) · [FAQ](#faq)</p>
 
 <p align="center">
   <a href="https://elegant-pastelito-6c3353.netlify.app/">
-    <img src="docs/preview.png" alt="Smart Registration Form — desktop preview" width="100%">
+    <img src="docs/demo.gif" alt="Smart Registration Form — animated demo" width="88%">
   </a>
 </p>
+
+<p align="center"><sub>Live capture of the real build — 547 KB, loops forever.</sub></p>
 
 ## Overview
 
 A sign-up form where every rule is written by hand in a separate validator module. The form is marked `novalidate` on purpose — instead of letting the browser throw its own tooltips, validation runs on input and renders inline error messages under the relevant field.
 
 `formValidator.js` holds the rules for each field: name shape, email format, password strength and confirmation matching. Errors appear and clear as you type, and the submit button only proceeds once every field is valid.
+
+## At a glance
+
+| Field | Detail |
+| --- | --- |
+| **Type** | Static site — no build step |
+| **Primary language** | HTML |
+| **Live demo** | [elegant-pastelito-6c3353.netlify.app](https://elegant-pastelito-6c3353.netlify.app/) |
+| **Repository** | [Mister2314/smart-registration-form](https://github.com/Mister2314/smart-registration-form) |
 
 ## Features
 
@@ -38,25 +53,34 @@ A sign-up form where every rule is written by hand in a separate validator modul
 | Logic | Vanilla JavaScript validation module |
 | Deploy | Netlify |
 
+## Architecture
+
+```mermaid
+flowchart LR
+  A["input event"] --> B["formValidator.js<br/>field rules"]
+  B --> C{"Valid?"}
+  C -->|no| D["Inline error<br/>under the field"]
+  C -->|yes| E["Clear error"]
+  E --> F["Submit unlocked"]
+```
+
 ## Screenshots
 
 | Desktop | Mobile |
 | :---: | :---: |
 | <img src="docs/preview.png" alt="Desktop view"> | <img src="docs/preview-mobile.png" alt="Mobile view" width="230"> |
 
-## Getting Started
-
-No build step and no dependencies — clone the repo and open the entry file, or serve the folder locally:
+## Quick Start
 
 ```bash
 git clone https://github.com/Mister2314/smart-registration-form.git
 cd smart-registration-form
 
-# Option 1 — open it directly
+# open it directly
 start index.html      # Windows
 open  index.html      # macOS
 
-# Option 2 — serve it locally
+# or serve the folder
 npx serve .
 ```
 
@@ -67,6 +91,35 @@ index.html — form markup with data- hooks for the validator
 formValidator.js — field rules and validation orchestration
 styles.css — card layout and error-state styling
 ```
+
+## FAQ
+
+<details>
+<summary><b>Why is the form `novalidate`?</b></summary>
+
+Because the browser's own tooltips cannot be styled or positioned. Turning them off is the only way to control what the user actually sees when a field is wrong.
+
+</details>
+
+<details>
+<summary><b>Where are the rules defined?</b></summary>
+
+In `formValidator.js`, one entry per field. The markup only carries `data-` hooks, so rules can change without touching the HTML.
+
+</details>
+
+<details>
+<summary><b>Does it check password confirmation?</b></summary>
+
+Yes — the confirm field is validated against the password field on every input event.
+
+</details>
+
+## Roadmap
+
+- [ ] Add a password strength meter
+- [ ] Add an async check for already-registered emails
+- [ ] Add keyboard-only and screen-reader tests
 
 ## Notes
 
