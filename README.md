@@ -1,8 +1,8 @@
-﻿# Smart Registration Form
+# Smart Registration Form
 
 Registration form with real-time, hand-written validation — no validation library, no browser default popups.
 
-**Live demo:** https://elegant-pastelito-6c3353.netlify.app/
+**Live demo:** https://smart-registration-form.vercel.app
 
 <div align="center">
 
@@ -18,7 +18,7 @@ Every rule lives in a separate `formValidator.js` module; the form is marked `no
 
 ## Tech stack
 
-HTML5 (`novalidate`) + CSS3 + vanilla JS (`FormValidator` class), deployed on Netlify.
+React 19 · TypeScript · Vite
 
 ## Features
 
