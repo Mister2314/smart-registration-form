@@ -1,10 +1,16 @@
-# Smart Registration Form
+﻿# Smart Registration Form
 
 Registration form with real-time, hand-written validation — no validation library, no browser default popups.
 
 **Live demo:** https://elegant-pastelito-6c3353.netlify.app/
 
-<img src="docs/preview.png" alt="Desktop view" width="380">
+<div align="center">
+
+| Desktop | Mobile |
+|---|---|
+| <img src="docs/shot-desktop.png" alt="Desktop view" width="700"> | <img src="docs/shot-mobile.png" alt="Mobile view" width="290"> |
+
+</div>
 
 ## What it does
 
