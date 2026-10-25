@@ -1,358 +1,576 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  fieldErrors,
+  passwordCriteria,
+  passwordScore,
+  securitySchema,
+  whoSchema,
+} from "./schema";
 import "./styles.css";
 
-type Field = "fullName" | "email" | "password" | "confirmPassword";
+/* ------------------------------------------------------------------ */
+/* Draft persistence — local only, sessionStorage, never leaves device */
+/* ------------------------------------------------------------------ */
 
-interface FieldState {
-  value: string;
-  status: "idle" | "valid" | "invalid";
-  errorMessage: string;
+const DRAFT_KEY = "trailhead-registration-draft";
+
+interface Draft {
+  fullName: string;
+  email: string;
+  password: string;
+  step: number;
+  startedAt: number;
 }
 
-const initialField: FieldState = { value: "", status: "idle", errorMessage: "" };
-
-function calculatePasswordStrength(password: string): {
-  score: number;
-  strength: "weak" | "fair" | "good" | "strong";
-} {
-  let score = 0;
-  if (password.length >= 8) score++;
-  if (password.length >= 12) score++;
-  if (/[a-z]/.test(password)) score++;
-  if (/[A-Z]/.test(password)) score++;
-  if (/[0-9]/.test(password)) score++;
-  if (/[^A-Za-z0-9]/.test(password)) score++;
-
-  let strength: "weak" | "fair" | "good" | "strong" = "weak";
-  if (score >= 6) strength = "strong";
-  else if (score >= 4) strength = "good";
-  else if (score >= 2) strength = "fair";
-
-  return { score, strength };
+function loadDraft(): Draft {
+  const fallback: Draft = { fullName: "", email: "", password: "", step: 0, startedAt: Date.now() };
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<Draft>;
+    return {
+      fullName: typeof parsed.fullName === "string" ? parsed.fullName : "",
+      email: typeof parsed.email === "string" ? parsed.email : "",
+      password: typeof parsed.password === "string" ? parsed.password : "",
+      step: typeof parsed.step === "number" ? Math.min(2, Math.max(0, parsed.step)) : 0,
+      startedAt: typeof parsed.startedAt === "number" ? parsed.startedAt : Date.now(),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
-/** Per-criterion breakdown for the segmented meter. */
-const criteria = (pw: string): [boolean, string][] => [
-  [pw.length >= 8, "8+ characters"],
-  [pw.length >= 12, "12+ characters"],
-  [/[a-z]/.test(pw), "a lowercase letter"],
-  [/[A-Z]/.test(pw), "an uppercase letter"],
-  [/[0-9]/.test(pw), "a number"],
-  [/[^A-Za-z0-9]/.test(pw), "a symbol"],
-];
+/* ------------------------------------------------------------------ */
+/* Theme                                                                */
+/* ------------------------------------------------------------------ */
 
-function strengthHint(pw: string): string {
-  if (!pw) return "Use 8+ characters with mixed case, a number and a symbol";
-  const missing = criteria(pw).filter(([ok]) => !ok).map(([, label]) => label);
-  if (missing.length === 0) return "All criteria met";
-  const next = missing.slice(0, 2).join(" and ");
-  return `Add ${next}`;
+type Theme = "light" | "dark";
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() =>
+    document.documentElement.dataset.theme === "dark" ? "dark" : "light"
+  );
+  const toggle = useCallback(() => {
+    setTheme((prev) => {
+      const next: Theme = prev === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = next;
+      document.documentElement.style.colorScheme = next;
+      try {
+        localStorage.setItem("trailhead-theme", next);
+      } catch {
+        /* private mode: theme just won't persist */
+      }
+      return next;
+    });
+  }, []);
+  return [theme, toggle];
 }
 
-type SubmitState = "idle" | "busy" | "done";
+/* ------------------------------------------------------------------ */
+/* Copy for the three steps (narrative rail)                            */
+/* ------------------------------------------------------------------ */
+
+const STEPS = [
+  {
+    kicker: "Step 1 of 3 — Who you are",
+    title: "Tell us who to put on the card",
+    body: "Your membership card and hut-reservation confirmations are issued in this name, exactly as you type it.",
+  },
+  {
+    kicker: "Step 2 of 3 — Security",
+    title: "Choose how you sign in",
+    body: "Long beats complicated. A line from a book you love, with a number or symbol worked in, is harder to guess than Pa$$w0rd and easier to remember.",
+  },
+  {
+    kicker: "Step 3 of 3 — Review",
+    title: "Check it before we cut the card",
+    body: "This demo runs entirely in your browser — nothing is sent anywhere. When you continue, your draft is cleared from this device.",
+  },
+] as const;
+
+/* ------------------------------------------------------------------ */
+/* Component                                                            */
+/* ------------------------------------------------------------------ */
+
+type SubmitOutcome = "idle" | "busy" | "done";
 
 export default function App() {
-  const [fields, setFields] = useState<Record<Field, FieldState>>({
-    fullName: initialField,
-    email: initialField,
-    password: initialField,
-    confirmPassword: initialField,
-  });
-  const [modalOpen, setModalOpen] = useState(false);
-  const [passwordTouched, setPasswordTouched] = useState(false);
-  const [submitState, setSubmitState] = useState<SubmitState>("idle");
+  const draft = useMemo(loadDraft, []);
+  const [step, setStep] = useState(draft.step);
+  const [fullName, setFullName] = useState(draft.fullName);
+  const [email, setEmail] = useState(draft.email);
+  const [password, setPassword] = useState(draft.password);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
-  const inputRefs = useRef<Record<Field, HTMLInputElement | null>>({
-    fullName: null,
-    email: null,
-    password: null,
-    confirmPassword: null,
-  });
-  const submitRef = useRef<HTMLButtonElement | null>(null);
-  const modalRef = useRef<HTMLDivElement | null>(null);
-  const closeRef = useRef<HTMLButtonElement | null>(null);
+  // Error state per field, keyed like the schema paths.
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  // A field only reports live errors once it has been blurred or a submit failed.
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [showPassword, setShowPassword] = useState(false);
+  const [outcome, setOutcome] = useState<SubmitOutcome>("idle");
+  const [honeypot, setHoneypot] = useState("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [theme, toggleTheme] = useTheme();
 
-  const validateFullName = (value: string): FieldState => {
-    const v = value.trim();
-    if (v.length < 2) {
-      return { value, status: "invalid", errorMessage: "Name must be at least 2 characters" };
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+
+  // Autosave draft (local only).
+  useEffect(() => {
+    const payload: Draft = { fullName, email, password, step, startedAt: draft.startedAt };
+    try {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
+      setSavedAt(Date.now());
+    } catch {
+      /* storage unavailable — form still works */
     }
-    if (!/^[a-zA-Z\s]+$/.test(v)) {
-      return { value, status: "invalid", errorMessage: "Name can only contain letters and spaces" };
-    }
-    return { value, status: "valid", errorMessage: "" };
-  };
+  }, [fullName, email, password, step, draft.startedAt]);
 
-  const validateEmail = (value: string): FieldState => {
-    const v = value.trim();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(v)) {
-      return { value, status: "invalid", errorMessage: "Please enter a valid email address" };
-    }
-    return { value, status: "valid", errorMessage: "" };
-  };
+  // Focus the step heading when the step changes (announce without modals).
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [step]);
 
-  const validatePassword = (value: string): FieldState => {
-    const strength = calculatePasswordStrength(value);
-    if (value.length < 8) {
-      return { value, status: "invalid", errorMessage: "Password must be at least 8 characters" };
-    }
-    if (strength.score < 3) {
-      return { value, status: "invalid", errorMessage: "Password is too weak" };
-    }
-    return { value, status: "valid", errorMessage: "" };
-  };
+  /* ---------------- validation ---------------- */
 
-  const validateConfirmPassword = (
-    value: string,
-    password: string
-  ): FieldState => {
-    if (value !== password) {
-      return { value, status: "invalid", errorMessage: "Passwords do not match" };
-    }
-    if (value.length === 0) {
-      return { value, status: "idle", errorMessage: "" };
-    }
-    return { value, status: "valid", errorMessage: "" };
-  };
-
-  const setField = (field: Field, next: FieldState) => {
-    setFields((prev) => {
-      const updated = { ...prev, [field]: next };
-      if (field === "password" && prev.confirmPassword.value) {
-        updated.confirmPassword = validateConfirmPassword(
-          prev.confirmPassword.value,
-          next.value
-        );
-      }
-      return updated;
-    });
-  };
-
-  const handleChange = (field: Field, raw: string) => {
-    if (field === "fullName") setField(field, validateFullName(raw));
-    else if (field === "email") setField(field, validateEmail(raw));
-    else if (field === "password") {
-      setPasswordTouched(true);
-      setField(field, validatePassword(raw));
-    } else setField(field, validateConfirmPassword(raw, fields.password.value));
-  };
-
-  const handleBlur = (field: Field, value: string) => {
-    if (field === "fullName") setField(field, validateFullName(value));
-    else if (field === "email") setField(field, validateEmail(value));
-    else if (field === "password") setField(field, validatePassword(value));
-    else setField(field, validateConfirmPassword(value, fields.password.value));
-  };
-
-  const allValid = Object.values(fields).every((f) => f.status === "valid");
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (submitState !== "idle") return;
-    // Re-validate everything at submit time, like the original.
-    const next: Record<Field, FieldState> = {
-      fullName: validateFullName(fields.fullName.value),
-      email: validateEmail(fields.email.value),
-      password: validatePassword(fields.password.value),
-      confirmPassword: validateConfirmPassword(
-        fields.confirmPassword.value,
-        fields.password.value
-      ),
-    };
-    setFields(next);
-    if (Object.values(next).every((f) => f.status === "valid")) {
-      setSubmitState("busy");
-      window.setTimeout(() => {
-        setSubmitState("done");
-        window.setTimeout(() => {
-          setModalOpen(true);
-          setSubmitState("idle");
-        }, 450);
-      }, 700);
-    } else {
-      const firstInvalid = (Object.keys(next) as Field[]).find(
-        (k) => next[k].status === "invalid"
-      );
-      if (firstInvalid) {
-        const el = inputRefs.current[firstInvalid];
-        el?.scrollIntoView({ block: "center", behavior: "smooth" });
-        el?.focus({ preventScroll: true });
-      }
-    }
-  };
-
-  const closeModal = useCallback(() => {
-    setModalOpen(false);
-    setPasswordTouched(false);
-    setFields({
-      fullName: initialField,
-      email: initialField,
-      password: initialField,
-      confirmPassword: initialField,
-    });
-    // The button becomes disabled after reset and cannot hold focus;
-    // return focus to the first field once the reset has rendered.
-    window.setTimeout(() => inputRefs.current.fullName?.focus(), 0);
+  const validateWho = useCallback((v: string, e: string) => {
+    const result = whoSchema.safeParse({ fullName: v, email: e });
+    return result.success ? {} : fieldErrors(result.error);
   }, []);
 
-  // Escape closes the modal; focus returns via closeModal.
-  useEffect(() => {
-    if (!modalOpen) return;
-    closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeModal();
-        return;
-      }
-      if (e.key === "Tab" && modalRef.current) {
-        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
-          "button, [href], input, [tabindex]:not([tabindex='-1'])"
-        );
-        if (focusables.length === 0) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [modalOpen, closeModal]);
+  const validateSecurity = useCallback((pw: string, cpw: string) => {
+    const result = securitySchema.safeParse({ password: pw, confirmPassword: cpw });
+    const errs = result.success ? {} : fieldErrors(result.error);
+    if (!errs.confirmPassword && pw && cpw && pw !== cpw) {
+      errs.confirmPassword = "The two passwords don't match — recheck for a stray character.";
+    }
+    return errs;
+  }, []);
 
-  const groups: {
-    field: Field;
-    label: string;
-    type: string;
-    success: string;
-    id: string;
-    autoComplete: string;
-  }[] = [
-    { field: "fullName", label: "Full Name", type: "text", success: "Looks good!", id: "fullName", autoComplete: "name" },
-    { field: "email", label: "Email Address", type: "email", success: "Valid email address!", id: "email", autoComplete: "email" },
-    { field: "password", label: "Password", type: "password", success: "Strong password!", id: "password", autoComplete: "new-password" },
-    { field: "confirmPassword", label: "Confirm Password", type: "password", success: "Passwords match!", id: "confirmPassword", autoComplete: "new-password" },
-  ];
+  const whoErrors = validateWho(fullName, email);
+  const securityErrors = validateSecurity(password, confirmPassword);
+  const stepErrors = step === 0 ? whoErrors : step === 1 ? securityErrors : {};
 
-  const passwordStrength = calculatePasswordStrength(fields.password.value);
-  const pwCriteria = criteria(fields.password.value);
-  const pwHint = strengthHint(fields.password.value);
+  // Shown = submit-failure errors, plus live schema errors on touched fields.
+  const shownErrors = { ...errors } as Record<string, string>;
+  for (const key of Object.keys(stepErrors)) {
+    if (touched[key]) shownErrors[key] = stepErrors[key];
+  }
+
+  const markTouched = (key: string) => setTouched((prev) => ({ ...prev, [key]: true }));
+
+  /* ---------------- navigation ---------------- */
+
+  const goTo = (next: number) => {
+    setStep(next);
+    setErrors({});
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const failTo = (errs: Record<string, string>, keys: string[]) => {
+    setErrors(errs);
+    keys.forEach((k) => setTouched((prev) => ({ ...prev, [k]: true })));
+    // Move focus to the error summary (or first bad field) so screen readers
+    // announce what went wrong before anything else.
+    window.setTimeout(() => {
+      summaryRef.current?.focus();
+      summaryRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 0);
+  };
+
+  const nextFromWho = () => {
+    const errs = validateWho(fullName, email);
+    if (Object.keys(errs).length > 0) failTo(errs, ["fullName", "email"]);
+    else goTo(1);
+  };
+
+  const nextFromSecurity = () => {
+    const errs = validateSecurity(password, confirmPassword);
+    if (Object.keys(errs).length > 0) failTo(errs, ["password", "confirmPassword"]);
+    else goTo(2);
+  };
+
+  const submit = () => {
+    if (acceptedTerms === false) {
+      failTo({ acceptedTerms: "You need to accept the club charter to continue." }, ["acceptedTerms"]);
+      return;
+    }
+    // Spam defense without CAPTCHA: hidden honeypot + minimum fill time.
+    if (honeypot !== "") return; // bot filled the trap — pretend success
+    if (Date.now() - draft.startedAt < 2500) return; // inhumanly fast — ignore
+
+    setOutcome("busy");
+    // Local demo: simulate the round trip, then clear the draft.
+    window.setTimeout(() => {
+      setOutcome("done");
+      try {
+        sessionStorage.removeItem(DRAFT_KEY);
+      } catch {
+        /* ignore */
+      }
+    }, 900);
+  };
+
+  /* ---------------- render helpers ---------------- */
+
+  const fieldProps = (key: string, invalid: boolean, describedBy?: string) => ({
+    "aria-invalid": invalid || undefined,
+    "aria-describedby": invalid ? (describedBy ? `${key}-error ${describedBy}` : `${key}-error`) : describedBy,
+  });
+
+  const score = passwordScore(password);
+  const summaryList =
+    step === 0
+      ? (["fullName", "email"] as const)
+      : step === 1
+        ? (["password", "confirmPassword"] as const)
+        : (["acceptedTerms"] as const);
+  const summaryItems = summaryList.filter((k) => shownErrors[k]);
+
+  const themeIcon = theme === "dark" ? "sun" : "moon";
 
   return (
-    <div className="container">
-      <div className="form-header">
-        <h1>Create Account</h1>
-        <p>Join us today and start your journey</p>
-      </div>
-
-      <form className="registration-form" noValidate onSubmit={handleSubmit}>
-        {groups.map(({ field, label, type, success, id, autoComplete }) => {
-          const f = fields[field];
-          const hasError = f.status === "invalid";
-          return (
-            <div className="input-group" key={field}>
-              <label htmlFor={id} data-state={f.status}>{label}</label>
-              <input
-                type={type}
-                id={id}
-                name={field}
-                required
-                autoComplete={autoComplete}
-                className={f.status === "valid" ? "valid" : hasError ? "invalid" : ""}
-                value={f.value}
-                ref={(el) => { inputRefs.current[field] = el; }}
-                aria-invalid={hasError || undefined}
-                aria-describedby={
-                  field === "password"
-                    ? hasError ? "password-error strength-meter" : "strength-meter"
-                    : hasError ? `${field}-error` : undefined
-                }
-                onChange={(e) => handleChange(field, e.target.value)}
-                onBlur={(e) => handleBlur(field, e.target.value)}
+    <div className="shell">
+      <header className="topbar">
+        <a className="wordmark" href="/">
+          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+            <path d="M16 4 27 26H5z" fill="var(--accent)" />
+            <path d="M12 18l4-6 4 6z" fill="var(--bg)" />
+          </svg>
+          Trailhead Alpine Club
+        </a>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title="Toggle theme"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            {themeIcon === "sun" ? (
+              <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="4.2" />
+                <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M4.9 4.9l1.7 1.7M17.4 17.4l1.7 1.7M19.1 4.9l-1.7 1.7M6.6 17.4l-1.7 1.7" />
+              </g>
+            ) : (
+              <path
+                d="M20 14.5A8.5 8.5 0 1 1 9.5 4 6.8 6.8 0 0 0 20 14.5z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinejoin="round"
               />
-              {field === "password" && (
-                <div className="password-strength" id="strength-meter" aria-live="polite">
-                  <div className="strength-segments" data-band={passwordTouched && f.value ? passwordStrength.strength : undefined} aria-hidden="true">
-                    {pwCriteria.map(([ok], i) => (
-                      <span key={i} className={`segment${ok ? " on" : ""}`} data-criterion={i} />
+            )}
+          </svg>
+        </button>
+      </header>
+
+      <main className="layout" id="main">
+        {/* Narrative rail */}
+        <aside className="rail" aria-hidden={outcome === "done" || undefined}>
+          <ol className="stepper" aria-label="Registration progress">
+            {["Who you are", "Security", "Review"].map((label, i) => (
+              <li
+                key={label}
+                className={`step-node${i === step ? " current" : ""}${i < step ? " done" : ""}`}
+                aria-current={i === step ? "step" : undefined}
+              >
+                <span className="step-dot" aria-hidden="true">
+                  {i < step ? (
+                    <svg viewBox="0 0 24 24" width="12" height="12">
+                      <path d="M4 12.5 10 18.5 20 6.5" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    i + 1
+                  )}
+                </span>
+                <span className="step-label">{label}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="rail-kicker">{STEPS[step].kicker}</p>
+          <h1 className="rail-title" tabIndex={-1} ref={headingRef}>
+            {STEPS[step].title}
+          </h1>
+          <p className="rail-body">{STEPS[step].body}</p>
+          {savedAt && outcome !== "done" && (
+            <p className="draft-note" role="status">
+              Draft saved on this device
+              {step > 0 || fullName || email ? " — you can close the tab and come back." : "."}
+            </p>
+          )}
+        </aside>
+
+        {/* Form column */}
+        <section className="panel" aria-label="Registration form">
+          {outcome === "done" ? (
+            <div className="done" role="status">
+              <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true" className="done-mark">
+                <path d="M4 12.5 10 18.5 20 6.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+              </svg>
+              <h2 tabIndex={-1}>Membership registered — welcome aboard</h2>
+              <p>
+                In the live product you'd get a confirmation at <strong>{email}</strong> within a few
+                minutes. This demo never stored anything beyond this browser tab, and your draft has
+                been cleared.
+              </p>
+              <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+                Start a new registration
+              </button>
+            </div>
+          ) : (
+            <form
+              noValidate
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (step === 0) nextFromWho();
+                else if (step === 1) nextFromSecurity();
+                else submit();
+              }}
+            >
+              {/* Honeypot — visually and programmatically hidden from humans */}
+              <div className="hp" aria-hidden="true">
+                <label htmlFor="company">Company</label>
+                <input
+                  id="company"
+                  name="company"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                />
+              </div>
+
+              {/* Error summary — shown after a failed Continue */}
+              {summaryItems.length > 0 && errors && Object.keys(errors).length > 0 && (
+                <div className="summary" role="alert" tabIndex={-1} ref={summaryRef}>
+                  <p className="summary-title">
+                    {summaryItems.length === 1
+                      ? "One thing needs fixing before you continue:"
+                      : `${summaryItems.length} things need fixing before you continue:`}
+                  </p>
+                  <ul>
+                    {summaryItems.map((k) => (
+                      <li key={k}>
+                        <a
+                          href={`#field-${k}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            document.getElementById(`field-${k}`)?.focus();
+                          }}
+                        >
+                          {shownErrors[k]}
+                        </a>
+                      </li>
                     ))}
-                  </div>
-                  <div className={`strength-text${passwordTouched && f.value ? " has-hint" : ""}`}>
-                    {passwordTouched && f.value
-                      ? `Password strength: ${passwordStrength.strength} — ${pwHint}`
-                      : "Use 8+ characters with mixed case, a number and a symbol"}
-                  </div>
+                  </ul>
                 </div>
               )}
-              <div
-                className={`error-message ${hasError ? "show" : ""}`}
-                id={hasError ? `${field}-error` : undefined}
-                role={hasError ? "alert" : undefined}
-              >
-                <span className="error-icon" aria-hidden="true">!</span>
-                <span className="error-text">{f.errorMessage}</span>
-              </div>
-              <div
-                className={`success-message ${f.status === "valid" ? "show" : ""}`}
-                aria-live="polite"
-              >
-                <span className="success-icon" aria-hidden="true">✓</span>
-                <span>{success}</span>
-              </div>
-            </div>
-          );
-        })}
 
-        <button
-          type="submit"
-          className={`submit-btn ${submitState}`}
-          disabled={!allValid || submitState !== "idle"}
-          ref={submitRef}
-          aria-busy={submitState === "busy" || undefined}
-        >
-          {submitState === "idle" && <span className="btn-label">Create Account</span>}
-          {submitState === "busy" && (
-            <>
-              <span className="btn-spinner" aria-hidden="true" />
-              <span className="btn-label">Creating…</span>
-            </>
-          )}
-          {submitState === "done" && (
-            <>
-              <svg className="btn-check" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 12.5 10 18.5 20 6.5" />
-              </svg>
-              <span className="btn-label">Created</span>
-            </>
-          )}
-        </button>
-      </form>
+              {step === 0 && (
+                <fieldset className="fields">
+                  <legend className="sr-only">Your details</legend>
+                  <div className="field">
+                    <label htmlFor="field-fullName">Full name</label>
+                    <input
+                      id="field-fullName"
+                      name="fullName"
+                      type="text"
+                      autoComplete="name"
+                      autoCapitalize="words"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      onBlur={() => markTouched("fullName")}
+                      {...fieldProps("fullName", !!shownErrors.fullName)}
+                    />
+                    {shownErrors.fullName && (
+                      <p className="field-error" id="fullName-error" role="alert">
+                        {shownErrors.fullName}
+                      </p>
+                    )}
+                  </div>
+                  <div className="field">
+                    <label htmlFor="field-email">Email address</label>
+                    <input
+                      id="field-email"
+                      name="email"
+                      type="email"
+                      inputMode="email"
+                      autoComplete="email"
+                      spellCheck={false}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      onBlur={() => markTouched("email")}
+                      {...fieldProps("email", !!shownErrors.email)}
+                    />
+                    {shownErrors.email && (
+                      <p className="field-error" id="email-error" role="alert">
+                        {shownErrors.email}
+                      </p>
+                    )}
+                    <p className="field-hint">Used for your card and hut bookings. No newsletter unless you ask.</p>
+                  </div>
+                </fieldset>
+              )}
 
-      <div
-        className={`success-modal ${modalOpen ? "show" : ""}`}
-        id="successModal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-        ref={modalRef}
-      >
-        <div className="modal-content">
-          <div className="modal-icon" aria-hidden="true">✓</div>
-          <h2 id="modal-title">Welcome!</h2>
-          <p>
-            Your account has been created successfully. Welcome to our community!
-          </p>
-          <button className="close-modal" onClick={closeModal} ref={closeRef}>
-            Get Started
-          </button>
-        </div>
-      </div>
+              {step === 1 && (
+                <fieldset className="fields">
+                  <legend className="sr-only">Sign-in details</legend>
+                  <div className="field">
+                    <label htmlFor="field-password">Password</label>
+                    <div className="password-row">
+                      <input
+                        id="field-password"
+                        name="password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        onBlur={() => markTouched("password")}
+                        {...fieldProps("password", !!shownErrors.password, "password-meter")}
+                      />
+                      <button
+                        type="button"
+                        className="reveal"
+                        onClick={() => setShowPassword((v) => !v)}
+                        aria-pressed={showPassword}
+                      >
+                        {showPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                    <div className="meter" id="password-meter" aria-live="polite">
+                      <div className="meter-segments" aria-hidden="true" data-score={password ? score : undefined}>
+                        {passwordCriteria.map((c, i) => (
+                          <span key={i} className={`seg${password && c.test(password) ? " on" : ""}`} />
+                        ))}
+                      </div>
+                      <p className="meter-text">
+                        {password
+                          ? score === 4
+                            ? "Strong. Nothing the schema would complain about."
+                            : `Still needs: ${passwordCriteria.filter((c) => !c.test(password)).map((c) => c.label.toLowerCase()).join(", ")}.`
+                          : "At least 12 characters. Length beats complexity."}
+                      </p>
+                    </div>
+                    {shownErrors.password && (
+                      <p className="field-error" id="password-error" role="alert">
+                        {shownErrors.password}
+                      </p>
+                    )}
+                  </div>
+                  <div className="field">
+                    <label htmlFor="field-confirmPassword">Re-enter password</label>
+                    <input
+                      id="field-confirmPassword"
+                      name="confirmPassword"
+                      type={showPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      onBlur={() => markTouched("confirmPassword")}
+                      {...fieldProps("confirmPassword", !!shownErrors.confirmPassword)}
+                    />
+                    {shownErrors.confirmPassword && (
+                      <p className="field-error" id="confirmPassword-error" role="alert">
+                        {shownErrors.confirmPassword}
+                      </p>
+                    )}
+                  </div>
+                </fieldset>
+              )}
+
+              {step === 2 && (
+                <fieldset className="fields">
+                  <legend className="sr-only">Review and confirm</legend>
+                  <dl className="review">
+                    <div className="review-row">
+                      <dt>Name</dt>
+                      <dd>{fullName || <span className="muted">—</span>}</dd>
+                    </div>
+                    <div className="review-row">
+                      <dt>Email</dt>
+                      <dd>{email || <span className="muted">—</span>}</dd>
+                    </div>
+                    <div className="review-row">
+                      <dt>Password</dt>
+                      <dd>{password ? "•".repeat(Math.min(password.length, 24)) : <span className="muted">—</span>}</dd>
+                    </div>
+                  </dl>
+                  <button
+                    type="button"
+                    className="linkish"
+                    onClick={() => {
+                      markTouched("fullName");
+                      markTouched("email");
+                      goTo(0);
+                    }}
+                  >
+                    Edit details
+                  </button>
+                  <div className="field">
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        name="acceptedTerms"
+                        checked={acceptedTerms}
+                        onChange={(e) => {
+                          setAcceptedTerms(e.target.checked);
+                          markTouched("acceptedTerms");
+                        }}
+                        aria-invalid={!!shownErrors.acceptedTerms || undefined}
+                        aria-describedby={shownErrors.acceptedTerms ? "acceptedTerms-error" : undefined}
+                      />
+                      <span>
+                        I've read the club charter and the privacy note. Members' names appear in the
+                        annual hut ledger; nothing else is shared.
+                      </span>
+                    </label>
+                    {shownErrors.acceptedTerms && (
+                      <p className="field-error" id="acceptedTerms-error" role="alert">
+                        {shownErrors.acceptedTerms}
+                      </p>
+                    )}
+                  </div>
+                </fieldset>
+              )}
+
+              <div className="actions">
+                {step > 0 && (
+                  <button type="button" className="btn btn-ghost" onClick={() => goTo(step - 1)}>
+                    Back
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={outcome === "busy"}
+                  aria-busy={outcome === "busy" || undefined}
+                >
+                  {outcome === "busy" ? (
+                    <>
+                      <span className="spinner" aria-hidden="true" /> Registering…
+                    </>
+                  ) : step === 2 ? (
+                    "Register membership"
+                  ) : (
+                    "Continue"
+                  )}
+                </button>
+              </div>
+              <p className="privacy-note">
+                Demo form. Everything you type stays in this browser tab (session storage) and is
+                deleted when you finish or close the tab.
+              </p>
+            </form>
+          )}
+        </section>
+      </main>
+
+      <footer className="footer">
+        <p>Trailhead Alpine Club · Est. 1948 · Membership desk, Mon–Fri</p>
+      </footer>
     </div>
   );
 }
